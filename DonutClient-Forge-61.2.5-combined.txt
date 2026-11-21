@@ -1,0 +1,2053 @@
+
+========================================
+FILE: README.md
+========================================
+# DonutClient — Forge 1.21.11 / 61.2.5
+
+Independent client-side utility mod for Java 21. This is not the original LarpClient source.
+
+## Implemented catalog entries in v0.6.0 (19/176)
+
+- Fullbright (`G`) with restoration of the previous gamma.
+- Zoom (`Z`) with restoration of the previous FOV.
+- Auto Sprint while forward is held, when not crouching/passenger and with sufficient hunger.
+- AutoEat: uses food already held in the main hand or offhand when hunger is low. It does not search or rearrange inventory.
+- AutoTool: selects the fastest suitable tool already in the hotbar for the block being targeted.
+- Custom center crosshair.
+- Custom FOV toggle (100 degrees; restores the previous setting when disabled).
+- Performance HUD: client FPS, server ping when connected, and average worn-armor durability.
+- Target HUD: name and health of the entity under the crosshair.
+- Looked-at entity label.
+- HUD coordinates and dimension.
+- Target block name/coordinates and block/sky light display.
+- Local waypoints (`K` saves; `L` clears).
+- Periodic scan of already-loaded nearby chunks for heuristic SusChunkFinder/Base Finder clues, storage blocks and spawners.
+- Motion Scanner heuristic label.
+- Config persistence for implemented module toggles.
+
+## Keybinds
+
+| Key | Action |
+|---|---|
+| Right Shift | Open ClickGUI |
+| G | Toggle Fullbright |
+| Z | Toggle Zoom |
+| K | Save waypoint |
+| L | Clear waypoints |
+
+Other implemented modules are toggled in ClickGUI.
+
+## Limitations and safety
+
+- **19 of 176 catalog entries are marked implemented.** Some are basic informational implementations, not complete equivalents of similarly named commercial modules.
+- Chunk scanning examines only chunks already loaded by the client, in a small radius and vertical band. It does not load chunks or reveal unloaded terrain.
+- Base/SusChunk/Motion findings are heuristics, not proof of a base or player activity.
+- StorageESP/SpawnerFinder currently provide scan counts/findings, not world-space 3D boxes.
+- Freecam, Freelook, and 3D ESP boxes are not implemented.
+- Most Combat, Movement, Player automation, Cosmetics and DonutSMP modules remain planned.
+- No anti-cheat bypasses, packet spoofing, combat automation, or server-side exploits are included.
+- **Not compiled or tested against Forge 61.2.5 in this environment.** Gradle is not installed in this runtime, so API compatibility and in-game behavior still require a local `gradle build` and client launch using JDK 21.
+
+
+========================================
+FILE: build.gradle
+========================================
+plugins {
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    id 'eclipse'
+    id 'maven-publish'
+}
+group = 'dev.donutclient'
+version = '0.6.0'
+base { archivesName = 'donutclient' }
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+minecraft {
+    mappings channel: 'official', version: '1.21.11'
+    copyIdeResources = true
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            property 'forge.logging.console.level', 'info'
+            mods { donutclient { source sourceSets.main } }
+        }
+        client {}
+        server {}
+    }
+}
+
+dependencies {
+    minecraft 'net.minecraftforge:forge:1.21.11-61.2.5'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+
+========================================
+FILE: gradle.properties
+========================================
+org.gradle.jvmargs=-Xmx3G\norg.gradle.daemon=false\n
+
+========================================
+FILE: settings.gradle
+========================================
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven { url = 'https://maven.minecraftforge.net' }
+    }
+}
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.9.0'
+}
+rootProject.name = 'donutclient'
+
+
+========================================
+FILE: src/main/java/dev/donutclient/ClickGuiScreen.java
+========================================
+package dev.donutclient;
+
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
+
+import java.util.List;
+
+public final class ClickGuiScreen extends Screen {
+    private static final int PANEL_X = 24;
+    private static final int PANEL_Y = 24;
+    private static final int PANEL_W = 360;
+    private static final int ROW_H = 22;
+    private int scroll;
+
+    public ClickGuiScreen() {
+        super(Component.literal("DonutClient"));
+    }
+
+    @Override
+    public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        renderBackground(g, mouseX, mouseY, partialTick);
+        int x2 = PANEL_X + PANEL_W;
+        int y2 = Math.min(height - 20, PANEL_Y + 48 + ModuleRegistry.all().size() * ROW_H);
+        g.fill(PANEL_X, PANEL_Y, x2, Math.max(PANEL_Y + 100, y2), 0xE9151820);
+        g.fill(PANEL_X, PANEL_Y, x2, PANEL_Y + 28, 0xFF273449);
+        g.drawString(font, "DONUTCLIENT  |  " + ModuleRegistry.all().size() + " MODULES",
+                PANEL_X + 10, PANEL_Y + 10, 0xFFFFFFFF, false);
+        g.drawString(font, "Green = implemented   Gray = catalog/backlog",
+                PANEL_X + 10, PANEL_Y + 34, 0xFFB8C4D8, false);
+
+        int start = Math.max(0, scroll);
+        int visible = Math.max(1, (height - PANEL_Y - 58) / ROW_H);
+        List<ClientModule> modules = ModuleRegistry.all();
+        for (int i = start; i < Math.min(modules.size(), start + visible); i++) {
+            ClientModule m = modules.get(i);
+            int y = PANEL_Y + 54 + (i - start) * ROW_H;
+            int bg = m.implemented() ? (m.enabled() ? 0xFF244D3C : 0xFF202A35) : 0xFF303039;
+            g.fill(PANEL_X + 6, y, x2 - 6, y + ROW_H - 2, bg);
+            String status = m.implemented() ? (m.enabled() ? "ON" : "OFF") : "PLANNED";
+            g.drawString(font, m.category() + "  /  " + m.name(),
+                    PANEL_X + 12, y + 6, m.implemented() ? 0xFFE8EDF5 : 0xFF969AA3, false);
+            int sw = font.width(status);
+            g.drawString(font, status, x2 - 14 - sw, y + 6,
+                    m.implemented() ? 0xFFB8F2C9 : 0xFFB0B0B0, false);
+        }
+        super.render(g, mouseX, mouseY, partialTick);
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (button == 0 && mouseX >= PANEL_X && mouseX <= PANEL_X + PANEL_W
+                && mouseY >= PANEL_Y + 54) {
+            int row = (int) ((mouseY - (PANEL_Y + 54)) / ROW_H);
+            int index = scroll + row;
+            if (index >= 0 && index < ModuleRegistry.all().size()) {
+                ModuleRegistry.all().get(index).toggle();
+                return true;
+            }
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        int max = Math.max(0, ModuleRegistry.all().size() -
+                Math.max(1, (height - PANEL_Y - 58) / ROW_H));
+        scroll = Math.max(0, Math.min(max, scroll - (int) Math.signum(delta) * 3));
+        return true;
+    }
+
+    @Override
+    public boolean isPauseScreen() {
+        return false;
+    }
+}
+
+
+========================================
+FILE: src/main/java/dev/donutclient/ClientConfig.java
+========================================
+package dev.donutclient;
+
+import net.minecraftforge.fml.loading.FMLPaths;
+import java.io.*;
+import java.nio.file.*;
+import java.util.Properties;
+
+public final class ClientConfig {
+    private static final Path FILE = FMLPaths.CONFIGDIR.get().resolve("donutclient.properties");
+    private ClientConfig() {}
+
+    public static void load() {
+        if (!Files.exists(FILE)) return;
+        Properties p = new Properties();
+        try (Reader r = Files.newBufferedReader(FILE)) {
+            p.load(r);
+            for (ClientModule module : ModuleRegistry.all()) {
+                if (module.implemented()) {
+                    module.setEnabled(Boolean.parseBoolean(p.getProperty("module." + module.id(), "false")));
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("[DonutClient] Config load failed: " + e.getMessage());
+        }
+    }
+
+    public static void save() {
+        Properties p = new Properties();
+        for (ClientModule module : ModuleRegistry.all()) {
+            if (module.implemented()) p.setProperty("module." + module.id(), Boolean.toString(module.enabled()));
+        }
+        try {
+            Files.createDirectories(FILE.getParent());
+            try (Writer w = Files.newBufferedWriter(FILE)) {
+                p.store(w, "DonutClient settings");
+            }
+        } catch (IOException e) {
+            System.err.println("[DonutClient] Config save failed: " + e.getMessage());
+        }
+    }
+}
+
+
+========================================
+FILE: src/main/java/dev/donutclient/ClientFeatures.java
+========================================
+package dev.donutclient;
+
+import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.Options;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.EntityHitResult;
+
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
+import net.minecraftforge.client.event.RenderGuiOverlayEvent;
+import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import org.lwjgl.glfw.GLFW;
+
+import java.util.*;
+
+@Mod.EventBusSubscriber(modid = DonutClient.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
+public final class ClientFeatures {
+    private static KeyMapping clickGuiKey;
+    private static KeyMapping fullbrightKey;
+    private static KeyMapping addWaypointKey;
+    private static KeyMapping clearWaypointsKey;
+    private static KeyMapping zoomKey;
+
+    private static double previousGamma = 1.0;
+    private static boolean capturedGamma;
+    private static int previousFov = 70;
+    private static boolean capturedFov;
+    private static int previousCustomFov = 70;
+    private static boolean capturedCustomFov;
+    private static long lastScanTick;
+    private static int clientTicks;
+    private static int lastEatTick = -1000;
+
+    private static final Map<Long, ChunkFinding> findings = new LinkedHashMap<>();
+    private static final List<Waypoint> waypoints = new ArrayList<>();
+    private static BlockPos targetedBlock;
+
+    private ClientFeatures() {}
+
+    @SubscribeEvent
+    public static void registerKeys(RegisterKeyMappingsEvent event) {
+        clickGuiKey = key("key.donutclient.clickgui", GLFW.GLFW_KEY_RIGHT_SHIFT);
+        fullbrightKey = key("key.donutclient.fullbright", GLFW.GLFW_KEY_G);
+        addWaypointKey = key("key.donutclient.add_waypoint", GLFW.GLFW_KEY_K);
+        clearWaypointsKey = key("key.donutclient.clear_waypoints", GLFW.GLFW_KEY_L);
+        zoomKey = key("key.donutclient.zoom", GLFW.GLFW_KEY_Z);
+        event.register(clickGuiKey);
+        event.register(fullbrightKey);
+        event.register(addWaypointKey);
+        event.register(clearWaypointsKey);
+        event.register(zoomKey);
+    }
+
+    private static KeyMapping key(String name, int code) {
+        return new KeyMapping(name, InputConstants.Type.KEYSYM, code, "key.categories.donutclient");
+    }
+
+    @Mod.EventBusSubscriber(modid = DonutClient.MOD_ID, value = Dist.CLIENT)
+    public static final class ForgeEvents {
+        @SubscribeEvent
+        public static void clientTick(TickEvent.ClientTickEvent event) {
+            if (event.phase != TickEvent.Phase.END) return;
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player == null || mc.level == null) return;
+            clientTicks++;
+
+            while (clickGuiKey.consumeClick()) mc.setScreen(new ClickGuiScreen());
+            while (fullbrightKey.consumeClick()) {
+                ModuleRegistry.byId("fullbright").ifPresent(ClientModule::toggle);
+            }
+            while (addWaypointKey.consumeClick()) addWaypoint();
+            while (clearWaypointsKey.consumeClick()) {
+                waypoints.clear();
+                mc.player.displayClientMessage(Component.literal("DonutClient: waypoints cleared"), true);
+            }
+            while (zoomKey.consumeClick()) {
+                ModuleRegistry.byId("zoom").ifPresent(ClientModule::toggle);
+            }
+            if (enabled("auto_sprint") && mc.screen == null && mc.options.keyUp.isDown()
+                    && !mc.player.isCrouching() && !mc.player.isPassenger() && mc.player.getFoodData().getFoodLevel() > 6) {
+                mc.player.setSprinting(true);
+            }
+
+            // AutoEat only uses food already held in either hand and invokes vanilla use-item.
+            if (enabled("autoeat") && mc.screen == null && mc.gameMode != null
+                    && mc.player.getFoodData().getFoodLevel() <= 16
+                    && mc.player.canEat(false) && clientTicks - lastEatTick >= 20) {
+                ItemStack main = mc.player.getMainHandItem();
+                ItemStack off = mc.player.getOffhandItem();
+                if (main.getFoodProperties(mc.player) != null) {
+                    mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+                    lastEatTick = clientTicks;
+                } else if (off.getFoodProperties(mc.player) != null) {
+                    mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND);
+                    lastEatTick = clientTicks;
+                }
+            }
+
+            // AutoTool chooses the fastest tool already in the hotbar for the targeted block.
+            if (enabled("autotool") && mc.screen == null
+                    && mc.hitResult instanceof net.minecraft.world.phys.BlockHitResult blockHit
+                    && mc.gameMode != null) {
+                BlockState state = mc.level.getBlockState(blockHit.getBlockPos());
+                int bestSlot = mc.player.getInventory().getSelectedSlot();
+                float bestSpeed = mc.player.getMainHandItem().getDestroySpeed(state);
+                for (int slot = 0; slot < 9; slot++) {
+                    ItemStack candidate = mc.player.getInventory().getItem(slot);
+                    float speed = candidate.getDestroySpeed(state);
+                    if (speed > bestSpeed) {
+                        bestSpeed = speed;
+                        bestSlot = slot;
+                    }
+                }
+                mc.player.getInventory().setSelectedSlot(bestSlot);
+            }
+
+            if (clientTicks - lastScanTick >= 100) {
+                lastScanTick = clientTicks;
+                scanLoadedChunks(mc);
+            }
+            updateTargetedBlock(mc);
+        }
+
+        @SubscribeEvent
+        public static void renderOverlay(RenderGuiOverlayEvent.Post event) {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player == null || mc.level == null) return;
+            var gui = event.getGuiGraphics();
+            if (enabled("customcrosshair")) {
+                int cx = mc.getWindow().getGuiScaledWidth() / 2;
+                int cy = mc.getWindow().getGuiScaledHeight() / 2;
+                int color = 0xEFFFFFFF;
+                gui.fill(cx - 5, cy, cx - 2, cy + 1, color);
+                gui.fill(cx + 2, cy, cx + 5, cy + 1, color);
+                gui.fill(cx, cy - 5, cx + 1, cy - 2, color);
+                gui.fill(cx, cy + 2, cx + 1, cy + 5, color);
+            }
+            int x = 8;
+            int y = 8;
+
+            // Lightweight local status overlays; these read client state only.
+            if (enabled("performance")) {
+                int fps = Minecraft.getInstance().getFps();
+                String pingText = "Ping: n/a";
+                if (mc.getConnection() != null && mc.player != null) {
+                    var info = mc.getConnection().getPlayerInfo(mc.player.getUUID());
+                    if (info != null) pingText = "Ping: " + info.getLatency() + " ms";
+                }
+                gui.drawString(mc.font, "FPS: " + fps + "  " + pingText, x, y,
+                        0xFFB7E8FF, true);
+                y += 12;
+            }
+            if (enabled("targethud") && mc.hitResult instanceof EntityHitResult entityHit
+                    && entityHit.getEntity() instanceof LivingEntity living) {
+                String targetName = living.getDisplayName().getString();
+                String targetHealth = String.format(java.util.Locale.ROOT, "%.1f / %.1f HP",
+                        living.getHealth(), living.getMaxHealth());
+                gui.drawString(mc.font, "Target: " + targetName + "  " + targetHealth,
+                        x, y, 0xFFFFA6A6, true);
+                y += 12;
+            }
+            if (enabled("nametags") && mc.hitResult instanceof EntityHitResult entityHit) {
+                gui.drawString(mc.font, "Look: " + entityHit.getEntity().getName().getString(),
+                        x, y, 0xFFE7D5FF, true);
+                y += 12;
+            }
+            if (enabled("performance") && mc.player != null) {
+                int armor = 0;
+                int worn = 0;
+                for (var stack : mc.player.getArmorSlots()) {
+                    if (!stack.isEmpty()) {
+                        worn++;
+                        int max = stack.getMaxDamage();
+                        if (max > 0) armor += Math.max(0, 100 - (stack.getDamageValue() * 100 / max));
+                    }
+                }
+                if (worn > 0) {
+                    gui.drawString(mc.font, "Armor avg: " + (armor / worn) + "%",
+                            x, y, 0xFFD5F0C8, true);
+                    y += 12;
+                }
+            }
+            if (enabled("hud")) {
+                gui.drawString(mc.font, "DonutClient", x, y, 0xFFFFFFFF, true);
+                y += 12;
+                gui.drawString(mc.font, "XYZ " + mc.player.blockPosition().getX() + " "
+                        + mc.player.blockPosition().getY() + " " + mc.player.blockPosition().getZ(),
+                        x, y, 0xFFE4EAF2, true);
+                y += 12;
+                gui.drawString(mc.font, "Dimension: " + mc.level.dimension().location(),
+                        x, y, 0xFFE4EAF2, true);
+                y += 12;
+            }
+            if (enabled("block_overlay") && targetedBlock != null) {
+                BlockState state = mc.level.getBlockState(targetedBlock);
+                String blockName = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+                gui.drawString(mc.font, blockName + " @ " + targetedBlock.getX() + ","
+                        + targetedBlock.getY() + "," + targetedBlock.getZ(),
+                        x, y, 0xFFFFD27A, true);
+                y += 12;
+            }
+            if (enabled("light_debug") && targetedBlock != null) {
+                int blockLight = mc.level.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, targetedBlock);
+                int skyLight = mc.level.getBrightness(net.minecraft.world.level.LightLayer.SKY, targetedBlock);
+                gui.drawString(mc.font, "Light: block " + blockLight + " / sky " + skyLight,
+                        x, y, 0xFFB7E8FF, true);
+                y += 12;
+            }
+            if (enabled("waypoints")) {
+                for (Waypoint waypoint : waypoints) {
+                    if (!waypoint.dimension.equals(mc.level.dimension())) continue;
+                    double distance = Math.sqrt(mc.player.distanceToSqr(
+                            waypoint.x + 0.5, waypoint.y + 0.5, waypoint.z + 0.5));
+                    gui.drawString(mc.font, waypoint.name + " [" + (int) distance + "m] "
+                            + waypoint.x + " " + waypoint.y + " " + waypoint.z,
+                            x, y, 0xFF8FE6C0, true);
+                    y += 11;
+                }
+            }
+            if (enabled("suschunkfinder") || enabled("base_finder")
+                    || enabled("motion_scanner") || enabled("storageesp")
+                    || enabled("spawnerfinder")) {
+                int shown = 0;
+                for (ChunkFinding finding : findings.values()) {
+                    if (shown++ >= 8) break;
+                    if (finding.dimension != mc.level.dimension()) continue;
+                    String label = "Chunk " + finding.x + "," + finding.z + " score " + finding.score;
+                    if (enabled("suschunkfinder") && finding.susScore > 0) {
+                        gui.drawString(mc.font, "Sus: " + label, x, y, 0xFFFFC66D, true);
+                        y += 11;
+                    } else if (enabled("base_finder") && finding.baseScore > 0) {
+                        gui.drawString(mc.font, "Base clue: " + label, x, y, 0xFFB5A0FF, true);
+                        y += 11;
+                    } else if (enabled("motion_scanner") && finding.lightScore > 0) {
+                        gui.drawString(mc.font, "Light anomaly: " + label, x, y, 0xFF8EDFFF, true);
+                        y += 11;
+                    }
+                }
+            }
+        }
+    }
+
+    private static boolean enabled(String id) {
+        return ModuleRegistry.byId(id).map(ClientModule::enabled).orElse(false);
+    }
+
+    public static void onModuleChanged(ClientModule module) {
+        if (module.id().equals("fullbright")) applyFullbright(module.enabled());
+        if (module.id().equals("zoom")) applyZoom(module.enabled());
+        if (module.id().equals("custom_fov")) applyCustomFov(module.enabled());
+    }
+
+    private static void applyZoom(boolean enabled) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.options == null) return;
+        if (enabled) {
+            if (!capturedFov) {
+                previousFov = mc.options.fov().get();
+                capturedFov = true;
+            }
+            mc.options.fov().set(30);
+        } else if (capturedFov) {
+            mc.options.fov().set(previousFov);
+            capturedFov = false;
+        }
+    }
+
+    private static void applyCustomFov(boolean enabled) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.options == null) return;
+        if (enabled) {
+            if (!capturedCustomFov) {
+                previousCustomFov = mc.options.fov().get();
+                capturedCustomFov = true;
+            }
+            mc.options.fov().set(100);
+        } else if (capturedCustomFov) {
+            mc.options.fov().set(previousCustomFov);
+            capturedCustomFov = false;
+        }
+    }
+
+    public static void applyFullbright(boolean enabled) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.options == null) return;
+        Options options = mc.options;
+        if (enabled) {
+            if (!capturedGamma) {
+                previousGamma = options.gamma().get();
+                capturedGamma = true;
+            }
+            options.gamma().set(16.0);
+        } else if (capturedGamma) {
+            options.gamma().set(previousGamma);
+            capturedGamma = false;
+        }
+    }
+
+    private static void addWaypoint() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) return;
+        BlockPos pos = mc.player.blockPosition();
+        waypoints.add(new Waypoint("Waypoint " + (waypoints.size() + 1),
+                pos.getX(), pos.getY(), pos.getZ(), mc.level.dimension()));
+        mc.player.displayClientMessage(Component.literal("DonutClient: waypoint saved at "
+                + pos.getX() + " " + pos.getY() + " " + pos.getZ()), true);
+    }
+
+    private static void updateTargetedBlock(Minecraft mc) {
+        if (mc.hitResult instanceof net.minecraft.world.phys.BlockHitResult hit
+                && hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
+            targetedBlock = hit.getBlockPos();
+        } else {
+            targetedBlock = null;
+        }
+    }
+
+    private static void scanLoadedChunks(Minecraft mc) {
+        if (mc.level == null || mc.player == null) return;
+        ChunkPos center = mc.player.chunkPosition();
+        ResourceKey<Level> dimension = mc.level.dimension();
+        int radius = 2;
+        int minY = Math.max(mc.level.getMinBuildHeight(), mc.player.blockPosition().getY() - 32);
+        int maxY = Math.min(mc.level.getMaxBuildHeight(), mc.player.blockPosition().getY() + 48);
+
+        for (int cx = center.x - radius; cx <= center.x + radius; cx++) {
+            for (int cz = center.z - radius; cz <= center.z + radius; cz++) {
+                LevelChunk chunk = mc.level.getChunkSource().getChunk(cx, cz, net.minecraft.world.level.chunk.ChunkStatus.FULL, false);
+                if (chunk == null) continue;
+                int sus = 0;
+                int base = 0;
+                int light = 0;
+                int storage = 0;
+                int spawners = 0;
+
+                for (int x = 0; x < 16; x++) {
+                    for (int z = 0; z < 16; z++) {
+                        for (int y = minY; y < maxY; y++) {
+                            BlockPos pos = new BlockPos((cx << 4) + x, y, (cz << 4) + z);
+                            Block block = chunk.getBlockState(pos).getBlock();
+
+                            if (isGrowthClue(block)) sus++;
+                            if (isBaseClue(block)) base++;
+                            if (isStorage(block)) storage++;
+                            if (block == Blocks.SPAWNER) spawners++;
+                        }
+                    }
+                }
+                if (sus > 0 || base > 0 || storage > 0 || spawners > 0) {
+                    int lightScore = Math.max(0, storage - 1) + Math.max(0, sus / 3);
+                    findings.put(chunkKey(cx, cz), new ChunkFinding(cx, cz, dimension,
+                            sus, base, lightScore, storage, spawners));
+                } else {
+                    findings.remove(chunkKey(cx, cz));
+                }
+            }
+        }
+        while (findings.size() > 256) {
+            Iterator<Long> it = findings.keySet().iterator();
+            it.next();
+            it.remove();
+        }
+    }
+
+    private static boolean isGrowthClue(Block b) {
+        return b == Blocks.AMETHYST_CLUSTER || b == Blocks.LARGE_AMETHYST_BUD
+                || b == Blocks.MEDIUM_AMETHYST_BUD || b == Blocks.SMALL_AMETHYST_BUD
+                || b == Blocks.BAMBOO || b == Blocks.KELP || b == Blocks.KELP_PLANT
+                || b == Blocks.SWEET_BERRY_BUSH || b == Blocks.POINTED_DRIPSTONE
+                || b == Blocks.CAVE_VINES || b == Blocks.CAVE_VINES_PLANT;
+    }
+
+    private static boolean isBaseClue(Block b) {
+        return isStorage(b) || b == Blocks.CRAFTING_TABLE || b == Blocks.FURNACE
+                || b == Blocks.BLAST_FURNACE || b == Blocks.SMOKER
+                || b == Blocks.ANVIL || b == Blocks.ENCHANTING_TABLE
+                || b == Blocks.BREWING_STAND || b == Blocks.BEACON
+                || b == Blocks.RESPAWN_ANCHOR || b == Blocks.ENDER_CHEST;
+    }
+
+    private static boolean isStorage(Block b) {
+        return b == Blocks.CHEST || b == Blocks.TRAPPED_CHEST || b == Blocks.BARREL
+                || b == Blocks.SHULKER_BOX || b == Blocks.WHITE_SHULKER_BOX
+                || b == Blocks.ORANGE_SHULKER_BOX || b == Blocks.MAGENTA_SHULKER_BOX
+                || b == Blocks.LIGHT_BLUE_SHULKER_BOX || b == Blocks.YELLOW_SHULKER_BOX
+                || b == Blocks.LIME_SHULKER_BOX || b == Blocks.PINK_SHULKER_BOX
+                || b == Blocks.GRAY_SHULKER_BOX || b == Blocks.LIGHT_GRAY_SHULKER_BOX
+                || b == Blocks.CYAN_SHULKER_BOX || b == Blocks.PURPLE_SHULKER_BOX
+                || b == Blocks.BLUE_SHULKER_BOX || b == Blocks.BROWN_SHULKER_BOX
+                || b == Blocks.GREEN_SHULKER_BOX || b == Blocks.RED_SHULKER_BOX
+                || b == Blocks.BLACK_SHULKER_BOX;
+    }
+
+    private static long chunkKey(int x, int z) {
+        return ((long) x << 32) ^ (z & 0xffffffffL);
+    }
+
+    private record ChunkFinding(int x, int z, ResourceKey<Level> dimension,
+                                int susScore, int baseScore, int lightScore,
+                                int storageCount, int spawnerCount) {
+        int score() { return susScore + baseScore + storageCount * 2 + spawnerCount * 5; }
+    }
+
+    private record Waypoint(String name, int x, int y, int z, ResourceKey<Level> dimension) {}
+}
+
+
+========================================
+FILE: src/main/java/dev/donutclient/ClientModule.java
+========================================
+package dev.donutclient;
+
+public final class ClientModule {
+    private final String id;
+    private final String name;
+    private final String category;
+    private final String description;
+    private final boolean implemented;
+    private boolean enabled;
+
+    public ClientModule(String id, String name, String category, String description, boolean implemented) {
+        this.id = id;
+        this.name = name;
+        this.category = category;
+        this.description = description;
+        this.implemented = implemented;
+    }
+
+    public String id() { return id; }
+    public String name() { return name; }
+    public String category() { return category; }
+    public String description() { return description; }
+    public boolean implemented() { return implemented; }
+    public boolean enabled() { return enabled; }
+
+    public void setEnabled(boolean value) {
+        if (!implemented) return;
+        enabled = value;
+        ModuleRegistry.onStateChanged(this);
+    }
+
+    public void toggle() {
+        if (implemented) setEnabled(!enabled);
+    }
+}
+
+
+========================================
+FILE: src/main/java/dev/donutclient/DonutClient.java
+========================================
+package dev.donutclient;
+
+import net.minecraftforge.fml.common.Mod;
+
+@Mod(DonutClient.MOD_ID)
+public final class DonutClient {
+    public static final String MOD_ID = "donutclient";
+
+    public DonutClient() {
+        ModuleRegistry.loadCatalog();
+        ClientConfig.load();
+    }
+}
+
+
+========================================
+FILE: src/main/java/dev/donutclient/ModuleRegistry.java
+========================================
+package dev.donutclient;
+
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import net.minecraftforge.fml.loading.FMLPaths;
+
+import java.io.Reader;
+import java.lang.reflect.Type;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+
+public final class ModuleRegistry {
+    private static final List<ClientModule> MODULES = new ArrayList<>();
+    private static final Gson GSON = new Gson();
+    private static final Type LIST_TYPE = new TypeToken<List<Map<String, Object>>>() {}.getType();
+
+    private ModuleRegistry() {}
+
+    public static void loadCatalog() {
+        try (Reader reader = ModuleRegistry.class.getResourceAsStream("/modules.json") == null
+                ? null : new java.io.InputStreamReader(ModuleRegistry.class.getResourceAsStream("/modules.json"))) {
+            if (reader == null) throw new IllegalStateException("Missing modules.json");
+            List<Map<String, Object>> rows = GSON.fromJson(reader, LIST_TYPE);
+            for (Map<String, Object> row : rows) {
+                String id = String.valueOf(row.get("id"));
+                String name = String.valueOf(row.get("name"));
+                String category = String.valueOf(row.get("category"));
+                String description = String.valueOf(row.get("description"));
+                boolean implemented = "implemented".equals(row.get("state"));
+                MODULES.add(new ClientModule(id, name, category, description, implemented));
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not load module catalog", e);
+        }
+    }
+
+    public static List<ClientModule> all() {
+        return Collections.unmodifiableList(MODULES);
+    }
+
+    public static List<ClientModule> inCategory(String category) {
+        return MODULES.stream().filter(m -> m.category().equals(category)).toList();
+    }
+
+    public static void onStateChanged(ClientModule module) {
+        ClientConfig.save();
+        ClientFeatures.onModuleChanged(module);
+    }
+
+    public static Optional<ClientModule> byId(String id) {
+        return MODULES.stream().filter(m -> m.id().equals(id)).findFirst();
+    }
+}
+
+
+========================================
+FILE: src/main/resources/META-INF/mods.toml
+========================================
+modLoader="javafml"
+loaderVersion="[61,)"
+license="MIT"
+
+[[mods]]
+modId="donutclient"
+version="0.4.0"
+displayName="DonutClient"
+description='''Independent modular client utilities for Minecraft 1.21.11.'''
+
+
+========================================
+FILE: src/main/resources/assets/donutclient/lang/en_us.json
+========================================
+{
+  "key.categories.donutclient": "DonutClient",
+  "key.donutclient.clickgui": "Open ClickGUI",
+  "key.donutclient.fullbright": "Toggle Fullbright",
+  "key.donutclient.add_waypoint": "Save Waypoint",
+  "key.donutclient.clear_waypoints": "Clear Waypoints",
+  "key.donutclient.zoom": "Toggle Zoom",
+  "key.donutclient.performance": "Performance HUD",
+  "key.donutclient.targethud": "Target HUD",
+  "key.donutclient.nametags": "Looked-at Entity Label",
+  "key.donutclient.custom_fov": "Custom FOV"
+}
+
+
+========================================
+FILE: src/main/resources/modules.json
+========================================
+[
+  {
+    "name": "Aim Assist",
+    "id": "aim_assist",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Anchor Macro",
+    "id": "anchor_macro",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AnchorTap",
+    "id": "anchortap",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AntiKnockback",
+    "id": "antiknockback",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AntiTrap",
+    "id": "antitrap",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Aura",
+    "id": "aura",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoAnchor",
+    "id": "autoanchor",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoArmor",
+    "id": "autoarmor",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoCart",
+    "id": "autocart",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoClicker",
+    "id": "autoclicker",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoCrystal",
+    "id": "autocrystal",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoGap",
+    "id": "autogap",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoTotem",
+    "id": "autototem",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoTrap",
+    "id": "autotrap",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoWeb",
+    "id": "autoweb",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Backtrack",
+    "id": "backtrack",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Criticals",
+    "id": "criticals",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Crystal Optimizer",
+    "id": "crystal_optimizer",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Crystal Tap",
+    "id": "crystal_tap",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Fake Lag",
+    "id": "fake_lag",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "HitBoxes",
+    "id": "hitboxes",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "HoverTotem",
+    "id": "hovertotem",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Lunge Swap",
+    "id": "lunge_swap",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Mace",
+    "id": "mace",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "MaceExploit",
+    "id": "maceexploit",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Reach",
+    "id": "reach",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Rod Swap",
+    "id": "rod_swap",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Shield Breaker",
+    "id": "shield_breaker",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Spin Bot",
+    "id": "spin_bot",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Totem Hit",
+    "id": "totem_hit",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "TriggerBot",
+    "id": "triggerbot",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "W Tap",
+    "id": "w_tap",
+    "category": "Combat",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AirStuck",
+    "id": "airstuck",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Elytra Swap",
+    "id": "auto_elytra_swap",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto MLG",
+    "id": "auto_mlg",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Pearl Catch",
+    "id": "auto_pearl_catch",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Sprint",
+    "id": "auto_sprint",
+    "category": "Movement",
+    "description": "Automatically sprints while forward is held and the player is grounded in normal movement conditions.",
+    "state": "implemented"
+  },
+  {
+    "name": "Boat Fly",
+    "id": "boat_fly",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "ElytraFly",
+    "id": "elytrafly",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "ElytraHelper",
+    "id": "elytrahelper",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "ElytraMotion",
+    "id": "elytramotion",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "EntitySpeed",
+    "id": "entityspeed",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Fly",
+    "id": "fly",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Grim Speed",
+    "id": "grim_speed",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Jesus",
+    "id": "jesus",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "No Jump Delay",
+    "id": "no_jump_delay",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "NoFall",
+    "id": "nofall",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "NoSlowdown",
+    "id": "noslowdown",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Scaffold",
+    "id": "scaffold",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Speed",
+    "id": "speed",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Target Strafe",
+    "id": "target_strafe",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Wind Charge Hop",
+    "id": "wind_charge_hop",
+    "category": "Movement",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Air Place",
+    "id": "air_place",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Drain",
+    "id": "auto_drain",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Farm",
+    "id": "auto_farm",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto GG",
+    "id": "auto_gg",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Reconnect",
+    "id": "auto_reconnect",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Sell",
+    "id": "auto_sell",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Tunnel",
+    "id": "auto_tunnel",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoDisconnect",
+    "id": "autodisconnect",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoEat",
+    "id": "autoeat",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "implemented"
+  },
+  {
+    "name": "AutoRespawn",
+    "id": "autorespawn",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "AutoTool",
+    "id": "autotool",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "implemented"
+  },
+  {
+    "name": "ChestStealer",
+    "id": "cheststealer",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Fast Use",
+    "id": "fast_use",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Home Macro",
+    "id": "home_macro",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "IgnoreEntity",
+    "id": "ignoreentity",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "InvCleaner",
+    "id": "invcleaner",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "MCFriend",
+    "id": "mcfriend",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "No Break Delay",
+    "id": "no_break_delay",
+    "category": "Player",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Block Overlay",
+    "id": "block_overlay",
+    "category": "Visuals",
+    "description": "Displays the targeted block name and coordinates.",
+    "state": "implemented"
+  },
+  {
+    "name": "Chams",
+    "id": "chams",
+    "category": "Visuals",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Custom FOV",
+    "id": "custom_fov",
+    "category": "Visuals",
+    "description": "Set the local field of view.",
+    "state": "implemented"
+  },
+  {
+    "name": "CustomCrosshair",
+    "id": "customcrosshair",
+    "category": "Visuals",
+    "description": "Draws a minimal configurable-style center crosshair overlay.",
+    "state": "implemented"
+  },
+  {
+    "name": "Damage Markers",
+    "id": "damage_markers",
+    "category": "Visuals",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "ESP",
+    "id": "esp",
+    "category": "Visuals",
+    "description": "Render local entity outlines.",
+    "state": "catalog"
+  },
+  {
+    "name": "Freecam",
+    "id": "freecam",
+    "category": "Visuals",
+    "description": "Detached local camera exploration.",
+    "state": "catalog"
+  },
+  {
+    "name": "Freelook",
+    "id": "freelook",
+    "category": "Visuals",
+    "description": "Rotate the view independently of player facing.",
+    "state": "catalog"
+  },
+  {
+    "name": "Fullbright",
+    "id": "fullbright",
+    "category": "Visuals",
+    "description": "Increase local world brightness.",
+    "state": "implemented"
+  },
+  {
+    "name": "HUD",
+    "id": "hud",
+    "category": "Visuals",
+    "description": "Displays coordinates, dimension, and module state.",
+    "state": "implemented"
+  },
+  {
+    "name": "Island Lyrics",
+    "id": "island_lyrics",
+    "category": "Visuals",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "ItemESP",
+    "id": "itemesp",
+    "category": "Visuals",
+    "description": "Highlight dropped items.",
+    "state": "catalog"
+  },
+  {
+    "name": "Menu Background",
+    "id": "menu_background",
+    "category": "Visuals",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Nametags",
+    "id": "nametags",
+    "category": "Visuals",
+    "description": "Render local labels above entities.",
+    "state": "implemented"
+  },
+  {
+    "name": "NoWeather",
+    "id": "noweather",
+    "category": "Visuals",
+    "description": "Hide local weather rendering.",
+    "state": "catalog"
+  },
+  {
+    "name": "Removals",
+    "id": "removals",
+    "category": "Visuals",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "SmoothCamera",
+    "id": "smoothcamera",
+    "category": "Visuals",
+    "description": "Smooth local camera transitions.",
+    "state": "catalog"
+  },
+  {
+    "name": "Staff List",
+    "id": "staff_list",
+    "category": "Visuals",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Stretched Res",
+    "id": "stretched_res",
+    "category": "Visuals",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "TargetHUD",
+    "id": "targethud",
+    "category": "Visuals",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "implemented"
+  },
+  {
+    "name": "Tracers",
+    "id": "tracers",
+    "category": "Visuals",
+    "description": "Draw local lines toward entities.",
+    "state": "catalog"
+  },
+  {
+    "name": "Waypoints",
+    "id": "waypoints",
+    "category": "Visuals",
+    "description": "Create and remove local coordinate waypoints.",
+    "state": "implemented"
+  },
+  {
+    "name": "XRay",
+    "id": "xray",
+    "category": "Visuals",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Zoom",
+    "id": "zoom",
+    "category": "Visuals",
+    "description": "Toggle a temporary low field-of-view zoom; restores the previous FOV when disabled.",
+    "state": "implemented"
+  },
+  {
+    "name": "3D UI",
+    "id": "3d_ui",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Ambient Particles",
+    "id": "ambient_particles",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Animations",
+    "id": "animations",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Astral Weapon Trails",
+    "id": "astral_weapon_trails",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Capes",
+    "id": "capes",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Celestial Weather",
+    "id": "celestial_weather",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "China Hat",
+    "id": "china_hat",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Click Pulse",
+    "id": "click_pulse",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Crypto Pets",
+    "id": "crypto_pets",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Crystal Chams",
+    "id": "crystal_chams",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "CustomSky",
+    "id": "customsky",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "EchoHand",
+    "id": "echohand",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Emotes",
+    "id": "emotes",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Flame Hands",
+    "id": "flame_hands",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Fog",
+    "id": "fog",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "GUI Animation",
+    "id": "gui_animation",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Hand Chams",
+    "id": "hand_chams",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Headless Korblox",
+    "id": "headless_korblox",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Hide Armour",
+    "id": "hide_armour",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Hit Sounds",
+    "id": "hit_sounds",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "HitFX",
+    "id": "hitfx",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Item Physic",
+    "id": "item_physic",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "JumpFX",
+    "id": "jumpfx",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "KillFX",
+    "id": "killfx",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Line Glyphs",
+    "id": "line_glyphs",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Motion Blur",
+    "id": "motion_blur",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "No Block Rotation",
+    "id": "no_block_rotation",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Pearl Particles",
+    "id": "pearl_particles",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Pets",
+    "id": "pets",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Player Model",
+    "id": "player_model",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Player Trail",
+    "id": "player_trail",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Realistic Water",
+    "id": "realistic_water",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "SelfVisuals",
+    "id": "selfvisuals",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Skin Changer",
+    "id": "skin_changer",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Sky Shader",
+    "id": "sky_shader",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Snow Ground",
+    "id": "snow_ground",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Sword Models",
+    "id": "sword_models",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "TargetAura",
+    "id": "targetaura",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "TimeChanger",
+    "id": "timechanger",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "ViewModel",
+    "id": "viewmodel",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Walk Style",
+    "id": "walk_style",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Waving Foliage",
+    "id": "waving_foliage",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Wet Ground",
+    "id": "wet_ground",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Wings",
+    "id": "wings",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "World Menu",
+    "id": "world_menu",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "WorldColor",
+    "id": "worldcolor",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "WorldLyrics",
+    "id": "worldlyrics",
+    "category": "Cosmetics",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Base Finder",
+    "id": "base_finder",
+    "category": "Base Finding",
+    "description": "Scores loaded chunks for clusters of player-placed or utility blocks.",
+    "state": "implemented"
+  },
+  {
+    "name": "Holes ESP",
+    "id": "holes_esp",
+    "category": "Base Finding",
+    "description": "Find enclosed vertical passages in loaded terrain.",
+    "state": "catalog"
+  },
+  {
+    "name": "Light Debug",
+    "id": "light_debug",
+    "category": "Base Finding",
+    "description": "Displays block and sky light at the targeted block.",
+    "state": "implemented"
+  },
+  {
+    "name": "Motion Scanner",
+    "id": "motion_scanner",
+    "category": "Base Finding",
+    "description": "Flags loaded chunks with unusual light and growth patterns.",
+    "state": "implemented"
+  },
+  {
+    "name": "SpawnerFinder",
+    "id": "spawnerfinder",
+    "category": "Base Finding",
+    "description": "Lists loaded mob spawner locations.",
+    "state": "implemented"
+  },
+  {
+    "name": "StorageESP",
+    "id": "storageesp",
+    "category": "Base Finding",
+    "description": "Lists and highlights storage block locations in loaded chunks.",
+    "state": "implemented"
+  },
+  {
+    "name": "SusChunkFinder",
+    "id": "suschunkfinder",
+    "category": "Base Finding",
+    "description": "Scores loaded chunks for configurable growth and lighting clues.",
+    "state": "implemented"
+  },
+  {
+    "name": "Fake FPS",
+    "id": "fake_fps",
+    "category": "Misc",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Fake Player",
+    "id": "fake_player",
+    "category": "Misc",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "LARP",
+    "id": "larp",
+    "category": "Misc",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Name Changer",
+    "id": "name_changer",
+    "category": "Misc",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Performance",
+    "id": "performance",
+    "category": "Misc",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "implemented"
+  },
+  {
+    "name": "Stream Proof",
+    "id": "stream_proof",
+    "category": "Misc",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Fake Scoreboard",
+    "id": "fake_scoreboard",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Fake Spawner",
+    "id": "fake_spawner",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "FakePay",
+    "id": "fakepay",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Order Dropper",
+    "id": "order_dropper",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Anchor Hunter",
+    "id": "anchor_hunter",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Area Miner",
+    "id": "auto_area_miner",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Builder",
+    "id": "auto_builder",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Auto Elytra Pilot",
+    "id": "auto_elytra_pilot",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "45-45-10",
+    "id": "45_45_10",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "50-50",
+    "id": "50_50",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Armor Game",
+    "id": "armor_game",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Arrow Game",
+    "id": "arrow_game",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Baccarat",
+    "id": "baccarat",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Blackjack",
+    "id": "blackjack",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Blackjack Force Only",
+    "id": "blackjack_force_only",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Even or Odd",
+    "id": "even_or_odd",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Fishing Game",
+    "id": "fishing_game",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Higher or Lower",
+    "id": "higher_or_lower",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Horse Racing",
+    "id": "horse_racing",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Mexican Jack",
+    "id": "mexican_jack",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Paper",
+    "id": "paper",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  },
+  {
+    "name": "Russian Roulette",
+    "id": "russian_roulette",
+    "category": "DonutSmp",
+    "description": "Catalog entry; implementation is scheduled in the feature backlog.",
+    "state": "catalog"
+  }
+]
+
+
+========================================
+FILE: src/main/resources/pack.mcmeta
+========================================
+{"pack":{"description":"DonutClient resources","pack_format":15}}
+
